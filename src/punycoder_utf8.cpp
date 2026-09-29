@@ -1,0 +1,109 @@
+#include "punycoder_core.h"
+
+namespace punycoder {
+
+std::vector<uint32_t> utf8_to_codepoints(const std::string& input) {
+    std::vector<uint32_t> codepoints;
+    codepoints.reserve(input.size());
+
+    size_t i = 0;
+    while (i < input.size()) {
+        unsigned char c = static_cast<unsigned char>(input[i]);
+
+        if (c < 0x80) {
+            codepoints.push_back(static_cast<uint32_t>(c));
+            ++i;
+            continue;
+        }
+
+        uint32_t cp = 0;
+        size_t extra = 0;
+
+        if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F;
+            extra = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F;
+            extra = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07;
+            extra = 3;
+        } else {
+            throw_error(ErrorCode::invalid_utf8_sequence);
+        }
+
+        if (i + extra >= input.size()) {
+            throw_error(ErrorCode::truncated_utf8_sequence);
+        }
+
+        for (size_t j = 1; j <= extra; ++j) {
+            unsigned char cc = static_cast<unsigned char>(input[i + j]);
+            if ((cc & 0xC0) != 0x80) {
+                throw_error(ErrorCode::invalid_utf8_continuation);
+            }
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+
+        if ((extra == 1 && cp < 0x80) ||
+            (extra == 2 && cp < 0x800) ||
+            (extra == 3 && cp < 0x10000)) {
+            // Overlong-encoding guard. Exercised by tests, but the coverage
+            // tool does not credit this multi-line-guarded throw.
+            throw_error(ErrorCode::overlong_utf8_sequence);  // # nocov
+        }
+
+        if (!is_valid_unicode_scalar(cp)) {
+            throw_error(ErrorCode::invalid_utf8_code_point);
+        }
+
+        codepoints.push_back(cp);
+        i += extra + 1;
+    }
+
+    return codepoints;
+}
+
+std::string codepoints_to_utf8(const std::vector<uint32_t>& codepoints) {
+    std::string output;
+    // One byte per code point, not four. Post-mapping host text is
+    // ASCII-dominant, so size() is the exact width in the common case, and a
+    // short ASCII host stays inside libstdc++/libc++ small-string storage --
+    // reserving 4x forces a heap allocation the label never needed. Non-ASCII
+    // labels grow from here, which costs one reallocation on a rarer path.
+    output.reserve(codepoints.size());
+
+    for (uint32_t cp : codepoints) {
+        if (cp <= 0x7F) {
+            output.push_back(static_cast<char>(cp));
+        } else if (cp <= 0x7FF) {
+            output.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+            output.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else if (cp <= 0xFFFF) {
+            output.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+            output.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else if (cp <= 0x10FFFF) {
+            output.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+            output.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else {
+            // Out-of-range scalars are rejected by the decoder's range check
+            // before they can reach this encoder.
+            throw_error(ErrorCode::invalid_unicode_code_point);  // # nocov
+        }
+    }
+
+    return output;
+}
+
+bool has_non_ascii(const std::string& input) {
+    for (unsigned char c : input) {
+        if (c > 0x7F) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace punycoder

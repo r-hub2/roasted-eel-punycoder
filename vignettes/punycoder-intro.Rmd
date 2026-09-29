@@ -1,0 +1,264 @@
+---
+title: "Introduction to punycoder"
+author: "Bart Turczynski"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to punycoder}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Introduction
+
+The `punycoder` package provides high-performance Unicode and Punycode encoding/decoding for internationalized domain names (IDNs). It addresses critical gaps in R's URL processing capabilities by offering reliable, fast conversion between Unicode and ASCII representations of domain names.
+
+## Why punycoder?
+
+### The Problem
+
+International domain names containing Unicode characters (like café.com or москва.рф) need to be converted to ASCII format for use in many network protocols and systems. Existing R packages have limitations:
+
+- **Inconsistent legacy helpers**: Existing workflows may produce incorrect punycode output
+- **Limited functionality**: No comprehensive IDN handling
+- **Performance**: No efficient bulk processing
+
+### The Solution
+
+`punycoder` provides:
+
+- **Reliable encoding/decoding** following RFC 3492 standards
+- **High performance** for large datasets
+- **Comprehensive validation** with informative error messages
+
+## Basic Usage
+
+### Domain Encoding and Decoding
+
+```{r basic-usage, eval=FALSE}
+library(punycoder)
+
+# Encode Unicode domains to ASCII
+puny_encode("café.com")
+# Returns: "xn--caf-dma.com"
+
+puny_encode("москва.рф")
+# Returns: "xn--80adxhks.xn--p1ai"
+
+# Decode ASCII domains back to Unicode
+puny_decode("xn--caf-dma.com")
+# Returns: "café.com"
+
+# Vectorized operations
+domains <- c("café.com", "москва.рф", "北京.中国")
+encoded <- puny_encode(domains)
+print(encoded)
+```
+
+### Validation and Utilities
+
+```{r validation, eval=FALSE}
+# Check if domain is already punycode
+is_punycode("xn--caf-dma.com") # TRUE
+is_punycode("café.com") # FALSE
+
+# Check if domain contains Unicode characters
+is_idn("café.com") # TRUE
+is_idn("example.com") # FALSE
+
+# Comprehensive domain validation
+result <- validate_domain(c("café.com", "invalid..domain", "valid.org"))
+print(result)
+```
+
+## Host Normalization
+
+`puny_encode()` is the raw RFC 3492 transform: it Punycode-encodes the labels you hand it, and nothing more. `host_normalize()` is the higher-level operation. It applies the UTS #46 canonical-host pipeline — character mapping, case folding, NFC normalization, label validation — and *then* encodes, so it answers "what is the canonical ASCII form of this host?" rather than "what is the Punycode of this string?".
+
+```{r normalize}
+library(punycoder)
+
+# Mapped, case-folded, validated, then encoded
+host_normalize("Café.Example.COM")
+
+# The codec transforms what it is given, and leaves case alone
+puny_encode("Café.Example.COM")
+```
+
+### Invalid Input Returns NA
+
+`host_normalize()` does not follow the strict/non-strict switch described above. It is a separate contract: a host that fails UTS #46 validation is reported as `NA` and never raises an error, so callers can layer their own policy on top.
+
+```{r normalize-na}
+host_normalize(c("valid.example", "example..com", "-bad-.example"))
+```
+
+### Profile Identity
+
+Normalization is pinned to a named profile. `normalization_profile_info()` returns that identity as a one-row data frame, which is what you record alongside results you intend to reproduce later:
+
+```{r normalize-profile}
+normalization_profile_info()
+```
+
+### Unicode Version Selection
+
+A build of `punycoder` ships a set of vendored Unicode table versions, one of which is the pinned default:
+
+```{r unicode-versions}
+unicode_versions()
+```
+
+Any shipped version can be selected per call. The difference between versions is confined to code points assigned in the newer one — a character that does not exist yet in the older tables is disallowed there, so the host is invalid:
+
+```{r unicode-version-select}
+host <- paste0(intToUtf8(0xA7CF), ".example")
+
+host_normalize(host, unicode_version = "16.0.0")
+host_normalize(host, unicode_version = "17.0.0")
+```
+
+Selecting a non-default version is reflected in the profile token, so the identity you record always describes the normalization that actually ran:
+
+```{r unicode-version-profile}
+normalization_profile_info(unicode_version = "16.0.0")$profile
+```
+
+The argument defaults to `NULL`, which means the pinned version — deliberately not "the newest available", so adding a table set in a later release cannot silently change results under existing code. Naming a version the build does not ship is an error listing what is available, never a quiet fall back to the pin.
+
+See `?host_normalize` for the relaxable validation flags and the full profile parameters.
+
+## Data Analysis Workflows
+
+### Bulk Domain Processing
+
+```{r bulk-processing, eval=FALSE}
+# Example: Processing large datasets
+set.seed(123)
+sample_domains <- c(
+  rep("example.com", 1000),
+  rep("café.com", 1000),
+  rep("test.org", 1000)
+)
+
+# Efficient vectorized encoding
+system.time({
+  encoded_domains <- puny_encode(sample_domains)
+})
+
+# Check results
+table(is_punycode(encoded_domains))
+```
+
+## Error Handling
+
+The package provides robust error handling with informative messages:
+
+```{r error-handling, eval=FALSE}
+# Strict validation (default)
+try({
+  puny_encode(c("valid.com", "")) # Empty string causes error
+})
+
+# Non-strict mode returns NA for invalid input
+result <- puny_encode(c("valid.com", ""), strict = FALSE)
+print(result)
+
+# Validation provides detailed error information
+validation <- validate_domain(c("valid.com", "invalid..domain", ""))
+print(validation)
+```
+
+## Performance Considerations
+
+The package is designed for high-performance processing:
+
+- **Vectorized operations**: Process thousands of domains efficiently
+- **C++ backend**: Native implementation for speed
+- **Memory efficient**: Handles large datasets without excessive memory use
+
+```{r performance, eval=FALSE}
+# Benchmark with large dataset
+large_domains <- rep(c("example.com", "café.com"), 5000)
+
+system.time({
+  encoded <- puny_encode(large_domains)
+})
+
+# Should process 10,000+ domains per second
+```
+
+## Package Options
+
+You can configure package behavior using R options:
+
+```{r options, eval=FALSE}
+# Set global strict validation
+options(punycoder.strict = FALSE)
+
+# Check current setting
+getOption("punycoder.strict")
+
+# Set encoding preference
+options(punycoder.encoding = "UTF-8")
+```
+
+## Integration with Other Packages
+
+`punycoder` is designed to integrate well with other R packages:
+
+```{r integration, eval=FALSE}
+# With data.table
+library(data.table)
+dt <- data.table(
+  original = c("café.com", "москва.рф"),
+  encoded = puny_encode(c("café.com", "москва.рф"))
+)
+
+# With dplyr
+library(dplyr)
+domains_df <- data.frame(
+  unicode_domain = c("café.com", "москва.рф")
+) |>
+  mutate(
+    ascii_domain = puny_encode(unicode_domain),
+    is_international = is_idn(unicode_domain)
+  )
+```
+
+## Next Steps
+
+- Explore the function documentation: `help(package = "punycoder")`
+- Check out the test suite for more examples
+- Report issues at: https://gitlab.com/bart-turczynski/punycoder/-/work_items
+
+## Technical Details
+
+The package uses a C++ backend with Rcpp for performance, and follows RFC 3492 standards for punycode implementation. When `libidn2` is available at build time, `punycoder` uses it behind the same R-level API and falls back to the built-in implementation otherwise.
+
+## See also
+
+`punycoder` is used as the Punycode and IDNA engine by two sibling packages:
+
+- **[pslr](https://CRAN.R-project.org/package=pslr)** — Public Suffix List engine. Uses `punycoder` for host canonicalization before PSL matching. Reach for it when you need eTLD or registrable-domain queries.
+- **[rurl](https://CRAN.R-project.org/package=rurl)** — Full URL parsing, normalization, cleaning, and joining toolkit. Builds on both `punycoder` and `pslr` to handle the complete URL processing pipeline.
+
+## Acknowledgments
+
+`punycoder` descends from the earlier R
+[hrbrmstr/punycode](https://github.com/hrbrmstr/punycode) package and
+implements published standards directly: RFC 3492 (Punycode), the IDNA2008
+RFCs, Unicode UTS #46, and UAX #15 normalization, validated against the
+Unicode Consortium's IdnaTestV2 conformance data. It is built on `Rcpp` with
+an optional GNU libidn2 backend.
+
+The full list of credits — prior art, dependencies, the standards this code
+implements, and the data sources it serves — is in
+[`ACKNOWLEDGMENTS.md`](https://gitlab.com/bart-turczynski/punycoder/-/blob/main/ACKNOWLEDGMENTS.md).
