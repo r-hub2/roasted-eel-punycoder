@@ -37,7 +37,7 @@ X-schema.org-keywords: punycode, punycode encode, punycode decode,
         IDNA, IDN, internationalized domain names, UTS-46, RFC 3492,
         Unicode, host normalization, hostname, domain names, TLD
 NeedsCompilation: yes
-Packaged: 2026-09-29 20:45:39 UTC; bartturczynski
+Packaged: 2026-09-29 21:10:14 UTC; bartturczynski
 Author: Bart Turczynski [aut, cre] (ORCID:
     <https://orcid.org/0000-0002-8788-7980>)
 Maintainer: Bart Turczynski <bartek@turczynski.pl>
